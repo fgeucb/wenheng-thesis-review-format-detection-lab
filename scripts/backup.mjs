@@ -17,6 +17,7 @@ await new Promise((resolve,reject)=>{
 const repo=await openDatabase(config);
 try{
  const rows=[...await repo.q('SELECT storage_path FROM paper_versions'),...await repo.q("SELECT storage_path FROM report_files WHERE status='ready'")];
+ for(const task of await repo.q('SELECT template_path,document_path,output_path,report_path FROM format_tasks'))for(const storage_path of Object.values(task))rows.push({storage_path});
  const files=[];let i=0;
  for(const original of [...new Set(rows.map(r=>r.storage_path).filter(Boolean))]){
   const relative=path.join('files',String(++i)+path.extname(original));await fs.mkdir(path.join(folder,'files'),{recursive:true});

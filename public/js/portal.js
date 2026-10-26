@@ -8,9 +8,9 @@ window.fetch=async(...args)=>{
 };
 async function api(url,options){
  const response=await fetch(url,options);const data=await response.json();
- if(!response.ok)throw Error(data.error||'请求失败');return data;
+ if(!response.ok)throw Object.assign(Error(data.error||'请求失败'),{status:response.status});return data;
 }
-const pageTitles={dashboard:'仪表盘',history:'评审历史',workspace:'评审工作台',profile:'个人中心'};
+const pageTitles={dashboard:'仪表盘',history:'评审历史',workspace:'评审工作台',format:'格式检测',profile:'个人中心'};
 function relativeTime(value){const time=new Date(value).getTime();if(!time)return formatDate(value);const seconds=(Date.now()-time)/1000;if(seconds<60)return '刚刚';if(seconds<3600)return Math.floor(seconds/60)+' 分钟前';if(seconds<86400)return Math.floor(seconds/3600)+' 小时前';if(seconds<86400*7)return Math.floor(seconds/86400)+' 天前';return formatDate(value);}
 // The review page has two modes: compose (upload, prompts, progress) and result (an opened run).
 // The prompt editor is a single element that moves between the two.
@@ -31,12 +31,12 @@ function setComposeTab(name){
 }
 function setPage(name,updateHash=true,compose){
  if(name==='review'){name='workspace';compose=true;}
- if(!['dashboard','history','workspace','profile'].includes(name))name='dashboard';
+ if(!Object.hasOwn(pageTitles,name))name='dashboard';
  const previous=activePage;activePage=name;
  if(name==='workspace')setMode(compose??composeMode);
  document.title=(name==='workspace'?(composeMode?'新建评审':realRun.metadata?.title||realRun.filename):pageTitles[name])+' · 文衡';
  if(previous!==name&&typeof window.scrollTo==='function')window.scrollTo({top:0});
- for(const page of ['dashboard','history','workspace','profile'])$('page-'+page).classList.toggle('hidden',page!==name);
+ for(const page of Object.keys(pageTitles))$('page-'+page).classList.toggle('hidden',page!==name);
  document.querySelectorAll('.sidebar [data-page]').forEach(b=>b.classList.toggle('sidebar__item--active',b.dataset.page===name));
  $('sidebar').classList.remove('sidebar--open');$('sidebar-overlay').classList.remove('sidebar-overlay--visible');$('mobile-menu-btn').setAttribute('aria-expanded','false');
  if(updateHash)history.replaceState(null,'','#'+(name==='workspace'?(composeMode?'review':'workspace/'+realRun.id):name));
@@ -278,6 +278,93 @@ $('review-form').addEventListener('submit',async event=>{
  }catch(error){$('upload-error').textContent=`${submitted?`已提交 ${submitted} 份；剩余文件未提交。`:''}${error.message}`;$('upload-error').classList.remove('hidden');droppedFiles=files.slice(submitted);$('paper-file').required=false;showFiles();}
  finally{uploading=false;$('submit-btn').textContent='开始评审';$('upload-model').disabled=false;updateUploadModel();await refreshPortal();if(submitted&&narrowScreen())$('task-list').scrollIntoView?.({behavior:'smooth',block:'start'});}
 });
+const formatFiles={template:null,paper:null};
+let formatSettings=null,formatTask=null,formatSourceId=null,formatSubmitting=false,formatPolling=false,formatDownloading=false,formatRevision=0,formatProblem='';
+const formatBusy=()=>formatSubmitting||['queued','running'].includes(formatTask?.status);
+function renderFormatFiles(){
+ const busy=formatBusy();
+ for(const kind of Object.keys(formatFiles)){
+  const file=formatFiles[kind];$('format-'+kind+'-selection').classList.toggle('hidden',!file);
+  $('format-'+kind+'-name').textContent=file?.name||'';
+  $('format-'+kind+'-name').title=file?.name||'';
+  $('format-'+kind+'-size').textContent=file?'DOCX · '+(file.size>=1024*1024?(file.size/1024/1024).toFixed(1)+' MB':Math.max(1,Math.ceil(file.size/1024))+' KB'):'';
+  $('format-'+kind+'-file').disabled=busy;$('format-'+kind+'-remove').disabled=busy;
+ }
+ const count=Object.values(formatFiles).filter(Boolean).length;
+ const labels={queued:'排队中',running:'检测中',succeeded:'检测完成',failed:'检测失败',interrupted:'检测已中断'};
+ const summary=formatTask?.summary,done=formatTask?.status==='succeeded';
+ $('format-selection-status').textContent=busy?(formatSubmitting?'正在提交文档…':formatTask.message):'已选择 '+count+' / 2 份文档';
+ $('format-hint').textContent=formatProblem||(!formatSettings?'正在连接格式检测服务…':!formatSettings.configured?formatSettings.message:busy?'检测在后台进行，刷新页面后可继续查看结果。':done?'检测已完成，可下载批注文档或重新检测。':'选择两份 DOCX 文档后即可开始检测，每份不超过 30 MB。');
+ $('format-result-name').textContent=formatTask?.output_name||(formatFiles.paper?formatFiles.paper.name.replace(/\.docx$/i,'')+'_带批注.docx':'待检测_带批注.docx');
+ $('format-result-status').textContent=done&&summary?.limited?'部分项目需核查':labels[formatTask?.status]||'等待生成';
+ let description='检测完成后，可在此下载带批注的论文，查看并修改格式差异。';
+ if(formatTask?.error)description=formatTask.error;
+ else if(done&&summary)description=`共发现 ${summary.issues} 处格式问题。${summary.limited?`${summary.unknown} 项无法判定，${summary.report_only} 项仅记录在报告中，${summary.skipped} 项跳过；请结合批注文档人工核查。`:'请下载带批注文档查看具体位置和修改建议。'}`;
+ else if(busy)description=formatSubmitting?'文档正在提交，请稍候。':formatTask.message;
+ $('format-result-description').textContent=description;
+ $('format-start').disabled=busy||!formatSettings?.configured||count!==2;
+ $('format-start').lastChild.textContent=busy?(formatSubmitting?'正在提交':'检测中'):formatTask?'重新检测':'开始检测';
+ $('format-download').disabled=!done||formatDownloading;
+}
+function acceptFormatTask(task){formatTask=task;formatSourceId=task.task_id;formatFiles.template=task.template;formatFiles.paper=task.paper;formatProblem='';renderFormatFiles();}
+async function initFormatPage(){
+ if(formatPolling)return;formatPolling=true;const revision=formatRevision;
+ try{const [settings,result]=await Promise.all([api('/api/format/config'),api('/api/format/tasks/latest')]);formatSettings=settings;if(revision===formatRevision){formatProblem='';if(result.task)acceptFormatTask(result.task);else renderFormatFiles();}else renderFormatFiles();}
+ catch{formatProblem='暂时无法连接格式检测服务，请确认后端已重启，稍后将自动重试。';renderFormatFiles();}
+ finally{formatPolling=false;}
+}
+async function pollFormatTask(){
+ if(formatPolling||formatSubmitting||!['queued','running'].includes(formatTask?.status))return;
+ formatPolling=true;const id=formatTask.task_id,revision=formatRevision;
+ try{const result=await api('/api/format/tasks/'+encodeURIComponent(id));if(revision===formatRevision&&formatTask?.task_id===id){formatTask=result.task;formatProblem='';renderFormatFiles();}}
+ catch{formatProblem='暂时无法获取检测进度，正在重试；后台任务仍会继续。';renderFormatFiles();}
+ finally{formatPolling=false;}
+}
+function selectFormatFile(kind,files){
+ if(formatBusy())return;
+ const file=files[0];if(!file)return;
+ const error=$('format-'+kind+'-error');
+ if(files.length!==1||!/\.docx$/i.test(file.name)||!file.size||file.size>(formatSettings?.max_file_bytes||30*1024*1024)){
+  error.textContent=files.length!==1?'每个区域只能选择一份文档。':!/\.docx$/i.test(file.name)?'请选择 .docx 格式的 Word 文档。':'文档不能为空，且每份不得超过 30 MB。';error.classList.remove('hidden');$('format-'+kind+'-file').value='';return;
+ }
+ formatRevision++;formatTask=null;formatProblem='';formatFiles[kind]=file;error.textContent='';error.classList.add('hidden');renderFormatFiles();
+}
+for(const kind of Object.keys(formatFiles)){
+ const input=$('format-'+kind+'-file'),area=$('format-'+kind+'-area');
+ input.addEventListener('change',()=>selectFormatFile(kind,Array.from(input.files||[])));
+ area.addEventListener('click',event=>{if(formatBusy())event.preventDefault();});
+ area.addEventListener('dragover',event=>{event.preventDefault();if(!formatBusy())area.classList.add('dragging');});
+ area.addEventListener('dragleave',event=>{if(!area.contains(event.relatedTarget))area.classList.remove('dragging');});
+ area.addEventListener('drop',event=>{event.preventDefault();area.classList.remove('dragging');selectFormatFile(kind,Array.from(event.dataTransfer?.files||[]));});
+ $('format-'+kind+'-remove').addEventListener('click',()=>{if(formatBusy())return;formatRevision++;formatTask=null;formatProblem='';formatFiles[kind]=null;input.value='';$('format-'+kind+'-error').classList.add('hidden');renderFormatFiles();});
+}
+$('format-start').addEventListener('click',async()=>{
+ if(formatBusy()||!formatSettings?.configured||!formatFiles.template||!formatFiles.paper)return;
+ formatSubmitting=true;formatProblem='';formatRevision++;renderFormatFiles();
+ try{
+  const form=new FormData();if(formatSourceId&&Object.values(formatFiles).some(file=>!(file instanceof File)))form.append('source_task_id',formatSourceId);
+  for(const [kind,file] of Object.entries(formatFiles))if(file instanceof File)form.append(kind==='paper'?'document':kind,file,file.name);
+  const result=await api('/api/format/tasks',{method:'POST',body:form});acceptFormatTask(result.task);
+ }catch(error){
+  formatProblem=error.status?error.message:'文档提交未能确认，正在查询后台任务，请稍候。';
+  if(!error.status||error.status===409){
+   try{const result=await api('/api/format/tasks/latest');if(['queued','running'].includes(result.task?.status))acceptFormatTask(result.task);else formatProblem='文档未能提交，请检查连接后重新检测。';}
+   catch{formatProblem='暂时无法确认提交结果，请恢复连接后刷新页面查看任务。';}
+  }
+ }
+ finally{formatSubmitting=false;renderFormatFiles();}
+});
+$('format-download').addEventListener('click',async()=>{
+ if(formatTask?.status!=='succeeded'||formatDownloading)return;
+ const task=formatTask;formatDownloading=true;renderFormatFiles();
+ try{
+  const response=await fetch('/api/format/tasks/'+encodeURIComponent(task.task_id)+'/download');
+  if(!response.ok){const result=await response.json();throw Error(result.error||'下载失败，请稍后重试。');}
+  const url=URL.createObjectURL(await response.blob()),link=document.createElement('a');link.href=url;link.download=task.output_name;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+ }catch(error){formatProblem=error.message;toast(error.message);}
+ finally{formatDownloading=false;renderFormatFiles();}
+});
+
 document.addEventListener('click',event=>{
  const page=event.target.closest('[data-page]');if(page){setPage(page.dataset.page);if(page.dataset.composeTab)setComposeTab(page.dataset.composeTab);}
  const composeButton=event.target.closest('.compose-tabs [data-compose-tab]');if(composeButton)setComposeTab(composeButton.dataset.composeTab);
@@ -316,6 +403,8 @@ window.addEventListener('hashchange',()=>{const [page,id]=location.hash.slice(1)
 async function bootPortal(){
  try{
   account=(await api('/api/auth/me')).user;
+  initFormatPage();
+  setInterval(()=>{if(!document.hidden&&activePage==='format'){if(!formatSettings)initFormatPage();else pollFormatTask();}},3000);
   $('current-username').textContent=account.username;$('user-avatar').textContent=account.username.slice(0,1);
   $('greeting-text').textContent='欢迎回来，'+account.username;$('current-date').textContent=new Date().toLocaleDateString('zh-CN',{year:'numeric',month:'long',day:'numeric',weekday:'long'});
   $('profile-username').textContent=account.username;$('profile-phone').textContent=account.phone||'未填写';$('profile-created').textContent=formatDate(account.created_at);

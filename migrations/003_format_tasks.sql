@@ -1,0 +1,23 @@
+CREATE TABLE format_tasks (
+ id VARCHAR(64) NOT NULL PRIMARY KEY,
+ owner_id VARCHAR(64) NOT NULL,
+ status VARCHAR(24) NOT NULL,
+ template_name VARCHAR(255) NOT NULL,
+ document_name VARCHAR(255) NOT NULL,
+ template_size BIGINT NOT NULL,
+ document_size BIGINT NOT NULL,
+ template_path VARCHAR(2048) NOT NULL,
+ document_path VARCHAR(2048) NOT NULL,
+ output_path VARCHAR(2048) NOT NULL,
+ report_path VARCHAR(2048) NOT NULL,
+ output_name VARCHAR(255) NOT NULL,
+ message TEXT NULL,
+ error TEXT NULL,
+ summary_json LONGTEXT NULL,
+ created_at VARCHAR(32) NOT NULL,
+ started_at VARCHAR(32) NULL,
+ finished_at VARCHAR(32) NULL,
+ KEY format_owner_created (owner_id, created_at),
+ KEY format_status_created (status, created_at),
+ CONSTRAINT format_owner_fk FOREIGN KEY (owner_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

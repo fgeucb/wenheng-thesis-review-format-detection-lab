@@ -21,6 +21,7 @@
  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8M21 3v5h-5"/></symbol>
  <symbol id="i-external" viewBox="0 0 24 24"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></symbol>
+ <symbol id="i-format" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 12h8M8 16h3m2 2 2 2 4-4"/></symbol>
  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
  <symbol id="i-locate" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></symbol>
@@ -49,6 +50,7 @@
   <button class="sidebar__item sidebar__item--active" data-page="dashboard"><svg class="icon"><use href="#i-dashboard"/></svg>仪表盘</button>
   <button class="sidebar__item" data-page="workspace"><svg class="icon"><use href="#i-workspace"/></svg>评审工作台</button>
   <button class="sidebar__item" data-page="history"><svg class="icon"><use href="#i-history"/></svg>评审历史</button>
+  <button class="sidebar__item" data-page="format"><svg class="icon"><use href="#i-format"/></svg>格式检测</button>
   <button class="sidebar__item" data-page="profile"><svg class="icon"><use href="#i-user"/></svg>个人中心</button>
  </nav>
  <div class="sidebar__bottom">
@@ -103,6 +105,56 @@
   </div>
   <div class="card__body card__body--flush" id="archive-list"><div class="skeleton-list"><span></span><span></span><span></span></div></div>
  </div>
+</section>
+
+<section id="page-format" class="page hidden">
+ <div class="page-header"><div><h1 class="page-title">格式检测</h1><p class="page-desc">上传模板论文与待检测论文，对照模板检查论文格式，并下载带批注的检测文档。</p></div></div>
+ <div class="format-upload-grid">
+  <section class="card" aria-labelledby="format-template-title">
+   <div class="card__header"><div class="format-step"><span class="format-step__number" aria-hidden="true">01</span><h2 id="format-template-title" class="card__title">模板论文</h2></div><span class="format-file-type">DOCX</span></div>
+   <div class="card__body">
+    <p class="format-card-desc">选择符合要求的模板论文，作为本次格式检测的参照。</p>
+    <label class="upload-area format-upload" id="format-template-area" for="format-template-file">
+     <span class="upload-symbol" aria-hidden="true"><svg class="icon"><use href="#i-upload"/></svg></span>
+     <span class="upload-area__copy"><span class="upload-area__text"><strong>选择模板论文</strong></span><span class="upload-area__hint">或拖拽文件到此处 · 支持单份 .docx 文档</span></span>
+     <input id="format-template-file" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" aria-label="选择模板论文" aria-describedby="format-template-error">
+    </label>
+    <div id="format-template-selection" class="format-selected hidden" role="status" aria-live="polite">
+     <svg class="icon" aria-hidden="true"><use href="#i-file"/></svg><div class="format-selected__copy"><strong id="format-template-name"></strong><span id="format-template-size"></span></div>
+     <button id="format-template-remove" type="button" class="icon-btn" aria-label="移除模板论文" title="移除模板论文"><svg class="icon"><use href="#i-x"/></svg></button>
+    </div>
+    <p id="format-template-error" class="field-status field-status--error format-file-error hidden" role="alert"></p>
+   </div>
+  </section>
+  <section class="card" aria-labelledby="format-paper-title">
+   <div class="card__header"><div class="format-step"><span class="format-step__number" aria-hidden="true">02</span><h2 id="format-paper-title" class="card__title">待检测论文</h2></div><span class="format-file-type">DOCX</span></div>
+   <div class="card__body">
+    <p class="format-card-desc">选择需要检查格式的论文，检测结果将以批注形式标出。</p>
+    <label class="upload-area format-upload" id="format-paper-area" for="format-paper-file">
+     <span class="upload-symbol" aria-hidden="true"><svg class="icon"><use href="#i-upload"/></svg></span>
+     <span class="upload-area__copy"><span class="upload-area__text"><strong>选择待检测论文</strong></span><span class="upload-area__hint">或拖拽文件到此处 · 支持单份 .docx 文档</span></span>
+     <input id="format-paper-file" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" aria-label="选择待检测论文" aria-describedby="format-paper-error">
+    </label>
+    <div id="format-paper-selection" class="format-selected hidden" role="status" aria-live="polite">
+     <svg class="icon" aria-hidden="true"><use href="#i-file"/></svg><div class="format-selected__copy"><strong id="format-paper-name"></strong><span id="format-paper-size"></span></div>
+     <button id="format-paper-remove" type="button" class="icon-btn" aria-label="移除待检测论文" title="移除待检测论文"><svg class="icon"><use href="#i-x"/></svg></button>
+    </div>
+    <p id="format-paper-error" class="field-status field-status--error format-file-error hidden" role="alert"></p>
+   </div>
+  </section>
+ </div>
+ <div class="format-actions">
+  <div><p id="format-selection-status" role="status" aria-live="polite">已选择 0 / 2 份文档</p><p id="format-hint" class="format-card-desc">选择两份 DOCX 文档后即可开始检测，每份不超过 30 MB。</p></div>
+  <button id="format-start" type="button" class="btn btn--primary" disabled><svg class="icon" aria-hidden="true"><use href="#i-format"/></svg>开始检测</button>
+ </div>
+ <section class="card" aria-labelledby="format-result-title">
+  <div class="card__header"><div class="format-step"><span class="format-step__number" aria-hidden="true">03</span><h2 id="format-result-title" class="card__title">检测结果</h2></div><span id="format-result-status" class="status-pill status-pill--none">等待生成</span></div>
+  <div class="card__body format-result">
+   <span class="format-result__icon" aria-hidden="true"><svg class="icon"><use href="#i-format"/></svg></span>
+   <div class="format-result__copy"><p class="format-result__label">输出文档</p><h3 id="format-result-name">待检测_带批注.docx</h3><p id="format-result-description" class="format-card-desc">检测完成后，可在此下载带批注的论文，查看并修改格式差异。</p></div>
+   <button id="format-download" type="button" class="btn btn--outline" disabled><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>下载文档</button>
+  </div>
+ </section>
 </section>
 
 <section id="page-profile" class="page hidden">

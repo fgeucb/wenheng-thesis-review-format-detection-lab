@@ -1,0 +1,17 @@
+# 可选配置。无歧义的普通论文不需要传入此文件。
+template:
+  body_styles: ["正文", "Normal"]
+  # start_text: "第一章"
+  # end_text: "参考文献"
+document:
+  body_styles: ["正文", "Normal"]
+
+# 仅当模板 A 存在多种节边距时使用：键为文档 B 节号，值为模板 A 节号。
+section_map:
+  "1": 1
+
+# 可选：自定义标题样式名称与层级，适用于未设置 Word 大纲级别的论文模板。
+# heading_styles:
+#   "章标题": 1
+#   "节标题": 2
+#   "小节标题": 3

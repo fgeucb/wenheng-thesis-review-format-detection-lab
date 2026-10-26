@@ -13,7 +13,7 @@ const settings=fs.readFileSync(new URL('../public/js/review-settings.js',import.
 const portal=fs.readFileSync(new URL('../public/js/portal.js',import.meta.url),'utf8');
 const controls=fs.readFileSync(new URL('../public/js/form-controls.js',import.meta.url),'utf8');
 const tick=async()=>{for(let i=0;i<5;i++)await new Promise(r=>setImmediate(r));};
-function setup({empty=false,legacy=false,tasks=[]}={}){
+function setup({empty=false,legacy=false,tasks=[],format={}}={}){
  const {document,Event,HTMLElement,HTMLInputElement,HTMLSelectElement}=parseHTML(html);
  // Geometry and form controls are browser facilities, mocked for DOM logic tests.
  HTMLElement.prototype.getBoundingClientRect=()=>({top:0,bottom:800,width:600,height:800});
@@ -22,15 +22,24 @@ function setup({empty=false,legacy=false,tasks=[]}={}){
  Object.defineProperty(HTMLInputElement.prototype,'checked',{get(){return this.hasAttribute('checked');},set(v){this.toggleAttribute('checked',v);},configurable:true});
  Object.defineProperty(HTMLSelectElement.prototype,'value',{get(){return this.querySelector('option[selected]')?.value||this.querySelector('option')?.value||'';},set(v){this.querySelectorAll('option').forEach(o=>o.toggleAttribute('selected',o.value===v));},configurable:true});
  document.querySelectorAll('form').forEach(f=>f.reset=()=>{f.querySelectorAll('input').forEach(i=>{i.value='';if(i.type==='file')i.files=[];});});
- const store={prompts:defaultPrompts()},requests=[];
+ const store={prompts:defaultPrompts(),formatTask:format.task||null},requests=[],intervals=[];
  const block={id:'b1',page:1,bbox:[100,100,600,140],text:'实验没有报告统计检验。'};
  const run={metadata:legacy?null:structuredClone(metadata),total_score:legacy?null:82,grade:legacy?null:'B／良好',report:{status:'ready'},id:'run-one',filename:'test-paper.pdf',created_at:'2026-01-01',page_count:1,page_sizes:[[595,842]],coordinate_size:[1000,1000],source_pdf:'/api/runs/run-one/pdf',model:'test-gpt',snapshots:defaultPrompts().map(v=>v[0]),blocks:[block],reviews:dimensions.map((dimension,i)=>({dimension,summary:'总结',issues:[{id:'issue-'+i,title:'意见 '+i,severity:i===0?'major':'minor',detail:'详细意见',suggestion:'建议',evidence_ids:['b1'],evidence:[block]}]}))};
  const context=vm.createContext({document,console,Event,FormData,Blob,File,URL,URLSearchParams,Date,structuredClone,
   location:{hash:'',href:'',replace(url){this.href=url;}},history:{replaceState(_a,_b,value){context.location.hash=value;}},
-  requestAnimationFrame:fn=>{fn();return 1;},setInterval:()=>1,setTimeout:(fn,delay)=>{if(delay===2000)queueMicrotask(fn);return 1;},clearTimeout(){},addEventListener(){},
+  requestAnimationFrame:fn=>{fn();return 1;},setInterval:(fn,delay)=>{intervals.push({fn,delay});return intervals.length;},setTimeout:(fn,delay)=>{if(delay===2000)queueMicrotask(fn);return 1;},clearTimeout(){},addEventListener(){},
   fetch:async(url,options={})=>{
    requests.push({url,options});let data;
+   if(url.startsWith('/api/format/')&&format.fetch){const response=await format.fetch(url,options,store);if(response)return response;}
    if(url==='/api/auth/me')data={user:{username:'tester',phone:'',created_at:'2026-01-01'}};
+   else if(url==='/api/format/config')data={configured:true,max_file_bytes:30*1024*1024};
+   else if(url==='/api/format/tasks/latest')data={task:store.formatTask};
+   else if(url==='/api/format/tasks'){
+    store.formatTask={task_id:'format-one',status:'queued',message:'等待检测',template:options.body.get('template')||store.formatTask.template,paper:options.body.get('document')||store.formatTask.paper,output_name:'论文_带批注.docx'};
+    data={task:store.formatTask};
+   }
+   else if(url==='/api/format/tasks/format-one')data={task:store.formatTask};
+   else if(url==='/api/format/tasks/format-one/download')return {ok:true,status:200,blob:async()=>new Blob(['DOCX'])};
    else if(url==='/api/review-options')data=reviewOptions();
    else if(url==='/api/review-preview')data={prompt:'平台默认评审标准预览',metadata:JSON.parse(options.body).metadata};
    else if(url==='/api/config/status')data={mineru_configured:true,models:[{id:'gpt',model:'test-gpt',configured:true},{id:'deepseek',configured:false}]};
@@ -58,8 +67,54 @@ function setup({empty=false,legacy=false,tasks=[]}={}){
   if(radios.length){radios.forEach(r=>{r.checked=r.value===value;});event([...radios].find(r=>r.value===value),'change');}
   else if($(prefix+'-'+key)){$(prefix+'-'+key).value=value;event($(prefix+'-'+key),'change');}
  }};
- return {context,document,$,click,event,fill,requests,store,run};
+ return {context,document,$,click,event,fill,requests,store,run,intervals};
 }
+
+function formatSelection(harness,kind,name){
+ const input=harness.$('format-'+kind+'-file');input.files=[new File(['PK fixture'],name)];harness.event(input,'change');
+}
+const savedFormatTask=()=>({task_id:'format-one',status:'succeeded',message:'检测完成',template:{name:'模板.docx',size:20},paper:{name:'论文.docx',size:20},output_name:'论文_带批注.docx',summary:{issues:2,unknown:1,report_only:1,skipped:0,limited:true}});
+
+test('format page validates files, submits both inputs, polls results and enables download',async()=>{
+ const harness=setup({empty:true});await tick();harness.click(harness.document.querySelector('[data-page="format"]'));
+ formatSelection(harness,'template','模板.pdf');assert.match(harness.$('format-template-error').textContent,/docx/);assert(harness.$('format-start').disabled);
+ formatSelection(harness,'template','模板.docx');formatSelection(harness,'paper','论文.docx');assert.equal(harness.$('format-start').disabled,false);
+ harness.click(harness.$('format-start'));await tick();
+ const submitted=harness.requests.find(request=>request.url==='/api/format/tasks').options.body;
+ assert.equal(submitted.get('template').name,'模板.docx');assert.equal(submitted.get('document').name,'论文.docx');assert.equal(submitted.get('source_task_id'),null);
+ assert(harness.$('format-start').disabled);assert(harness.$('format-template-file').disabled);assert(harness.$('format-download').disabled);
+ harness.store.formatTask=savedFormatTask();harness.intervals.find(interval=>interval.delay===3000).fn();await tick();
+ assert.equal(harness.$('format-download').disabled,false);assert.equal(harness.$('format-template-file').disabled,false);
+ assert.equal(harness.$('format-result-status').textContent,'部分项目需核查');assert.match(harness.$('format-result-description').textContent,/2 处格式问题/);
+ harness.click(harness.$('format-download'));await tick();assert(harness.requests.some(request=>request.url.endsWith('/format-one/download')));
+});
+
+test('format page restores saved inputs and only references them when reusing a file',async()=>{
+ const harness=setup({empty:true,format:{task:savedFormatTask()}});await tick();
+ assert.equal(harness.$('format-template-name').textContent,'模板.docx');assert.equal(harness.$('format-download').disabled,false);
+ formatSelection(harness,'paper','修订论文.docx');harness.click(harness.$('format-start'));await tick();
+ const submitted=harness.requests.find(request=>request.url==='/api/format/tasks').options.body;
+ assert.equal(submitted.get('source_task_id'),'format-one');assert.equal(submitted.get('template'),null);assert.equal(submitted.get('document').name,'修订论文.docx');
+ const fresh=setup({empty:true,format:{task:savedFormatTask()}});await tick();
+ formatSelection(fresh,'template','新模板.docx');formatSelection(fresh,'paper','新论文.docx');fresh.click(fresh.$('format-start'));await tick();
+ assert.equal(fresh.requests.find(request=>request.url==='/api/format/tasks').options.body.get('source_task_id'),null);
+});
+
+test('format page clears an initial connection error after reconnecting without an existing task',async()=>{
+ let offline=true;
+ const harness=setup({empty:true,format:{fetch:async url=>{if(url==='/api/format/config'&&offline)throw Error('offline');}}});await tick();
+ assert.match(harness.$('format-hint').textContent,/无法连接/);offline=false;harness.click(harness.document.querySelector('[data-page="format"]'));
+ harness.intervals.find(interval=>interval.delay===3000).fn();await tick();assert.doesNotMatch(harness.$('format-hint').textContent,/无法连接/);
+ formatSelection(harness,'template','模板.docx');formatSelection(harness,'paper','论文.docx');assert.equal(harness.$('format-start').disabled,false);
+});
+
+test('format page recovers an accepted task when the upload response is lost',async()=>{
+ const harness=setup({empty:true,format:{fetch:async(url,options,store)=>{
+  if(url==='/api/format/tasks'){store.formatTask={...savedFormatTask(),status:'running',message:'正在检测',summary:null};throw Error('connection lost');}
+ }}});await tick();formatSelection(harness,'template','模板.docx');formatSelection(harness,'paper','论文.docx');
+ harness.click(harness.$('format-start'));await tick();assert.equal(harness.$('format-result-status').textContent,'检测中');assert(harness.$('format-start').disabled);
+ assert.equal(harness.requests.filter(request=>request.url==='/api/format/tasks').length,1);
+});
 
 test('actual HTML/scripts: dashboard, navigation, filters, details and evidence links',async()=>{
  const h=setup();await tick();
@@ -179,7 +234,7 @@ test('task list: newest first, superseded failures hidden, status filter and exp
 test('workspace overview no longer shows contribution/criteria details or rerun parameter form',async()=>{
  const h=setup();await tick();h.click(h.document.querySelector('[data-open-run]'));await tick();
  assert(h.$('run-overview').classList.contains('is-collapsed'));
- assert.deepEqual([...h.document.querySelectorAll('.sidebar__nav [data-page]')].map(b=>b.dataset.page),['dashboard','workspace','history','profile']);
+ assert.deepEqual([...h.document.querySelectorAll('.sidebar__nav [data-page]')].map(b=>b.dataset.page),['dashboard','workspace','history','format','profile']);
  assert(!h.$('run-overview').textContent.includes('主要贡献与评价边界'));assert(!h.$('run-overview').textContent.includes('评分依据与优先修改清单'));
  assert.equal(h.document.querySelector('.rerun-settings'),null);assert.equal(h.$('rerun-metadata'),null);
  h.run.compliance=[{code:'training',name:'专业培养要求符合性',status:'pass',finding:'符合专业方向',evidence_ids:[],evidence:[]},{code:'topic',name:'文题一致性',status:'concern',finding:'题目偏大',evidence_ids:['b1'],evidence:[h.run.blocks[0]]},{code:'political',name:'政治方向',status:'pass',finding:'未发现政治方向问题',evidence_ids:[],evidence:[]}];

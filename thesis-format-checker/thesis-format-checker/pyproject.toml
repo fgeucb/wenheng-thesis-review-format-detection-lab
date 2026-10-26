@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "thesis-format-checker"
+version = "1.0.0"
+description = "使用 Microsoft Word 对照模板检测论文格式并写入原生批注"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "python-docx>=1.2,<2",
+  "pywin32>=306; platform_system == 'Windows'",
+  "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[project.scripts]
+thesis-checker = "thesis_format_checker.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+  "integration: 需要 Windows、Microsoft Word 和 pywin32 的端到端测试",
+]

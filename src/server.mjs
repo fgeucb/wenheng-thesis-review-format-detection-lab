@@ -16,6 +16,7 @@ import {createReportService,reportHtml,reportTemplateVersion} from './reports.mj
 import {createReviewEngine} from './review-engine.mjs';
 import {liveProgress} from './progress.mjs';
 import {pricingTable} from './pricing.mjs';
+import {createFormatService,docxMime,formatFileLimit} from './format-checker.mjs';
 
 const root=fileURLToPath(new URL('..',import.meta.url));
 if(!process.env.REVIEW_SKIP_ENV)try{process.loadEnvFile(path.join(root,'.env'));}catch(error){if(error.code!=='ENOENT')throw error;}
@@ -26,13 +27,14 @@ const repo=await openDatabase(databaseConfig());await repo.seedStandard();await 
 const allowedHosts=new Set(['127.0.0.1','localhost',...String(process.env.REVIEW_ALLOWED_HOSTS||'').split(',').map(h=>h.trim().toLowerCase()).filter(Boolean)]);
 const hostAllowed=host=>allowedHosts.has(String(host||'').toLowerCase().replace(/:\d+$/,''));
 const reports=createReportService(repo,dataDir),engine=createReviewEngine(repo,dataDir,reports),auth=createAuth({repo});
+const formats=createFormatService(repo,dataDir);
 const execFileAsync=promisify(execFile);
 const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.png':'image/png','.pdf':'application/pdf'};
 const publicFiles=new Set(['/login.html','/register.html','/js/auth.js','/css/theme.css','/index.html','/js/portal.js','/js/app.js','/js/form-controls.js','/js/review-settings.js']);
 const send=(res,status,payload)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(payload));};
 const fail=(status,message)=>Object.assign(Error(message),{status});
 const safeName=name=>path.basename(name||'paper.pdf').replace(/[^\w\-.\u4e00-\u9fff ]/g,'_');
-async function bodyBuffer(req){const chunks=[];let size=0;const limit=req.headers['content-type']?.startsWith('multipart/')?31*1024*1024:128*1024;for await(const chunk of req){size+=chunk.length;if(size>limit)throw fail(413,'请求过大，每份 PDF 限制为 30 MB');chunks.push(chunk);}return Buffer.concat(chunks);}
+async function bodyBuffer(req,maximum){const chunks=[];let size=0;const limit=maximum??(req.headers['content-type']?.startsWith('multipart/')?31*1024*1024:128*1024);for await(const chunk of req){size+=chunk.length;if(size>limit)throw fail(413,maximum?'上传请求过大，每份 DOCX 限制为 30 MB':'请求过大，每份 PDF 限制为 30 MB');chunks.push(chunk);}return Buffer.concat(chunks);}
 async function jsonBody(req){try{return JSON.parse((await bodyBuffer(req)).toString('utf8'));}catch(error){if(error.status)throw error;throw fail(400,'无效的 JSON 请求');}}
 async function publicTask(t){const report=t.run_id?await repo.report(t.run_id):null;return {task_id:t.id,filename:t.filename||t.request?.legacy_task?.filename||'历史任务',provider:t.provider,model:t.model,status:t.status,stage:t.stage,message:t.message,error:t.error,created_at:t.created_at,started_at:t.started_at,finished_at:t.finished_at,...await liveProgress(repo,t),run_id:t.run_id,metadata:t.request.metadata||null,report:publicReport(report),retry_of_task_id:t.request.retry_of_task_id||null,can_retry:['failed','interrupted'].includes(t.status)&&!!t.paper_version_id&&!!t.request.model_config};}
 function publicReport(r){if(!r)return null;const {storage_path,sha256,...result}=r;return result;}
@@ -62,6 +64,20 @@ async function handler(req,res){
   if(req.method==='POST'&&url.pathname==='/api/auth/logout'){await auth.logout(req,res);return send(res,200,{ok:true});}
   if(req.method==='POST'&&url.pathname==='/api/auth/password'){await auth.changePassword(user,await jsonBody(req),res);return send(res,200,{ok:true});}
   if(req.method==='GET'&&url.pathname==='/api/config/status')return send(res,200,{mineru_configured:Boolean(process.env.MINERU_TOKEN),models:modelOptions(),usd_to_cny:pricingTable().usd_to_cny});
+  if(req.method==='GET'&&url.pathname==='/api/format/config')return send(res,200,formats.configuration());
+  if(req.method==='GET'&&url.pathname==='/api/format/tasks/latest')return send(res,200,{task:await formats.latest(user.id)});
+  if(req.method==='POST'&&url.pathname==='/api/format/tasks'){
+   if(!req.headers['content-type']?.startsWith('multipart/form-data'))throw fail(415,'请使用文件上传请求');
+   let form;try{form=await new Request('http://localhost',{method:'POST',headers:req.headers,body:await bodyBuffer(req,2*formatFileLimit+1024*1024)}).formData();}catch(error){if(error.status)throw error;throw fail(400,'文件上传内容无效');}
+   return send(res,202,{task:await formats.submit(user.id,form)});
+  }
+  if(req.method==='GET'&&/^\/api\/format\/tasks\/[^/]+\/download$/.test(url.pathname)){
+   const output=await formats.download(url.pathname.split('/')[4],user.id);
+   const filename=encodeURIComponent(output.name).replace(/['()*]/g,character=>'%'+character.charCodeAt(0).toString(16).toUpperCase());
+   res.setHeader('Content-Disposition',`attachment; filename="annotated.docx"; filename*=UTF-8''${filename}`);
+   await sendFile(res,output.path,docxMime);return;
+  }
+  if(req.method==='GET'&&/^\/api\/format\/tasks\/[^/]+$/.test(url.pathname))return send(res,200,{task:await formats.get(url.pathname.split('/')[4],user.id)});
   if(req.method==='GET'&&url.pathname==='/api/review-options')return send(res,200,{...reviewOptions(),models:modelOptions()});
   if(req.method==='POST'&&url.pathname==='/api/review-preview'){
    const input=await jsonBody(req),metadata=validateMetadata(input.metadata,input.filename),request=await snapshot(user.id,metadata,null,input.prompt_versions??null);
@@ -150,6 +166,7 @@ server.on('error',error=>{console.error('启动失败：',error.code||'unknown')
 const listenHost=process.env.REVIEW_HOST||'127.0.0.1';
 server.listen(Number(process.env.REVIEW_PORT||4173),listenHost,async()=>{
  try{
+  formats.start();
   // Do not mark tasks interrupted until this process has successfully bound its port.
   const recovery=await repo.recover();console.log(`Review backend: http://${listenHost}:${server.address().port}`);
   for(const id of recovery)engine.enqueue(id);
@@ -158,5 +175,8 @@ server.listen(Number(process.env.REVIEW_PORT||4173),listenHost,async()=>{
   for(const row of pending)reports.request(row.run_id).catch(error=>console.error('report queue:',safeError(error)));
  }catch(error){console.error('startup recovery failed:',safeError(error));}
 });
-// Close the database pool cleanly when the process is asked to stop.
-for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>{server.close();repo.close().finally(()=>process.exit(0));});
+let shuttingDown=false;
+for(const signal of ['SIGINT','SIGTERM'])process.once(signal,async()=>{
+ if(shuttingDown)return;shuttingDown=true;server.close();
+ try{await formats.shutdown();}finally{await repo.close();process.exit(0);}
+});
